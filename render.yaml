@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: dace-unerg-telegram-monitor
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: UNERG_USER
+        sync: false
+      - key: UNERG_PASS
+        sync: false
