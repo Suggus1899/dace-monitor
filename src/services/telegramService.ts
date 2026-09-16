@@ -104,7 +104,7 @@ export class TelegramService {
 
   private async connectCommand(chatId: number): Promise<void> {
     const token = await this.accounts.createConnectionToken(String(chatId));
-    await this.bot.sendMessage(chatId, `Abre este enlace privado para conectar DACE:\n${this.appBaseUrl}/connect?token=${token}\n\nVence en 10 minutos. No envíes tus credenciales por Telegram.`);
+    await this.bot.sendMessage(chatId, `Abre este enlace privado para conectar DACE:\n<a href="${this.appBaseUrl}/connect?token=${token}">🔐 Abrir enlace seguro</a>\n\nVence en 10 minutos. No envíes tus credenciales por Telegram.`, { parse_mode: "HTML" });
   }
 
   private async disconnectCommand(chatId: number): Promise<void> {
