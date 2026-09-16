@@ -47,6 +47,13 @@ export function isClosedInscriptionHtml(html: string): boolean {
   return normalize(cheerio.load(html).text()).includes(CLOSED_TEXT);
 }
 
+export function inscriptionDetail(html: string, state: InscriptionStatus["state"]): string {
+  if (state === "open") return "DACE no muestra el aviso de inscripción cerrada.";
+  const text = cheerio.load(html).text().replace(/\s+/g, " ").trim();
+  const message = text.match(/No hay ningún proceso de inscripción activo[^.]*\.?/iu)?.[0]?.trim();
+  return message || "No hay ningún proceso de inscripción activo.";
+}
+
 export function isPdfBuffer(buffer: Buffer): boolean {
   return buffer.length >= 5 && buffer.subarray(0, 5).toString("ascii") === "%PDF-";
 }
@@ -176,11 +183,10 @@ export class DaceService {
     if (!isAuthenticated(response)) {
       throw new DaceError("UNEXPECTED_CONTENT", "DACE devolvió una página no autenticada al consultar inscripciones.");
     }
-    const detail = cheerio.load(response.data)(".inscripciones").text().replace(/\s+/g, " ").trim()
-      || cheerio.load(response.data)("body").text().replace(/\s+/g, " ").trim();
+    const state = isClosedInscriptionHtml(response.data) ? "closed" : "open";
     return {
-      state: isClosedInscriptionHtml(response.data) ? "closed" : "open",
-      detail,
+      state,
+      detail: inscriptionDetail(response.data, state),
       checkedAt: new Date(),
     };
   }
