@@ -53,6 +53,19 @@ export class TelegramService {
   }
 
   start(): void {
+    void this.bot.setMyCommands([
+      { command: "start", description: "Abrir el menú" },
+      { command: "conectar", description: "Conectar tu cuenta DACE" },
+      { command: "desconectar", description: "Eliminar cuenta guardada" },
+      { command: "estado", description: "Ver estado de DACE" },
+      { command: "inscripcion", description: "Consultar inscripciones" },
+      { command: "ping", description: "Comprobar bot y DACE" },
+      { command: "alertas", description: "Configurar alertas" },
+      { command: "pensum", description: "Descargar Pénsum" },
+      { command: "constancia_notas", description: "Descargar constancia de notas" },
+      { command: "notas", description: "Ver notas" },
+      { command: "ayuda", description: "Ver ayuda" },
+    ]).catch((error: Error) => console.error("Could not set Telegram commands:", error.message));
     this.bot.onText(/^\/start(?:@\w+)?$/, (message) => void this.startCommand(message.chat.id));
     this.bot.onText(/^\/conectar(?:@\w+)?$/, (message) => void this.connectCommand(message.chat.id));
     this.bot.onText(/^\/desconectar(?:@\w+)?$/, (message) => void this.disconnectCommand(message.chat.id));
