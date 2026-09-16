@@ -4,6 +4,7 @@ import type { TelegramService } from "../services/telegramService.js";
 
 export function startInscriptionCron(dace: DaceService, telegram: TelegramService, chatId: string): ScheduledTask {
   let running = false;
+  let lastAvailability: string | undefined;
   const run = async (): Promise<void> => {
     if (running) {
       console.warn("Inscription cron skipped: previous run is still active.");
@@ -15,6 +16,13 @@ export function startInscriptionCron(dace: DaceService, telegram: TelegramServic
       if (status.state === "open") {
         await telegram.bot.sendMessage(chatId, `🚨 INSCRIPCIONES ABIERTAS\n${status.detail}`);
       }
+      const features = await dace.getAcademicAvailability();
+      const available = features.filter((feature) => feature.available).map((feature) => feature.label);
+      const availability = available.join("|");
+      if (lastAvailability !== undefined && availability !== lastAvailability) {
+        await telegram.bot.sendMessage(chatId, `🔔 DACE cambió las opciones disponibles: ${available.join(", ") || "ninguna opción adicional"}.`);
+      }
+      lastAvailability = availability;
       console.info(`Inscription check: ${status.state}`);
     } catch (error) {
       console.error("Inscription cron failed:", error);

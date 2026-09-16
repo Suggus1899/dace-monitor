@@ -1,5 +1,5 @@
 import TelegramBot, { type CallbackQuery } from "node-telegram-bot-api";
-import type { DaceError, DaceService, DownloadedDocument, GradeTable, InscriptionStatus } from "./daceService.js";
+import type { AcademicFeature, DaceError, DaceService, DownloadedDocument, GradeTable, InscriptionStatus } from "./daceService.js";
 
 const MAX_MESSAGE_LENGTH = 3_800;
 
@@ -28,6 +28,15 @@ function userError(error: unknown): string {
   return "DACE devolvió una respuesta inesperada. Intenta nuevamente más tarde.";
 }
 
+function formatAvailability(features: AcademicFeature[]): string {
+  const available = features.filter((feature) => feature.available).map((feature) => feature.label);
+  const unavailable = features.filter((feature) => !feature.available).map((feature) => feature.label);
+  return [
+    `Disponible: ${available.join(", ") || "ninguna opción adicional"}.`,
+    `Sin período activo: ${unavailable.join(", ") || "ninguna"}.`,
+  ].join("\n");
+}
+
 export class TelegramService {
   readonly bot: TelegramBot;
 
@@ -45,6 +54,8 @@ export class TelegramService {
     this.bot.onText(/^\/pensum(?:@\w+)?$/, (message) => void this.pensumCommand(message.chat.id));
     this.bot.onText(/^\/constancia_notas(?:@\w+)?$/, (message) => void this.gradesDocumentCommand(message.chat.id));
     this.bot.onText(/^\/notas(?:@\w+)?$/, (message) => void this.notesCommand(message.chat.id));
+    this.bot.onText(/^\/estado(?:@\w+)?$/, (message) => void this.statusCommand(message.chat.id));
+    this.bot.onText(/^\/ayuda(?:@\w+)?$/, (message) => void this.helpCommand(message.chat.id));
     this.bot.on("callback_query", (query) => void this.callback(query));
     this.bot.on("polling_error", (error) => console.error("Telegram polling error:", error.message));
   }
@@ -62,13 +73,40 @@ export class TelegramService {
     await this.bot.sendMessage(chatId, "DACE UNERG: elige una consulta.", {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Inscripción", callback_data: "inscription" }],
+          [{ text: "Estado", callback_data: "status" }, { text: "Inscripción", callback_data: "inscription" }],
           [{ text: "Pénsum", callback_data: "pensum" }],
           [{ text: "Constancia de notas", callback_data: "grades-document" }],
           [{ text: "Notas", callback_data: "notes" }],
+          [{ text: "Ayuda", callback_data: "help" }],
         ],
       },
     });
+  }
+
+  private async helpCommand(chatId: number): Promise<void> {
+    if (!this.allowed(chatId)) return;
+    await this.bot.sendMessage(chatId, [
+      "Comandos disponibles:",
+      "/estado — opciones que DACE tiene habilitadas.",
+      "/inscripcion — estado actual de inscripciones.",
+      "/pensum — PDF oficial.",
+      "/constancia_notas — PDF oficial.",
+      "/notas — PDF y tabla extraída.",
+    ].join("\n"));
+  }
+
+  private async statusCommand(chatId: number): Promise<void> {
+    if (!this.allowed(chatId)) return;
+    try {
+      const [inscription, features] = await Promise.all([
+        this.dace.checkInscription(),
+        this.dace.getAcademicAvailability(),
+      ]);
+      const inscriptionText = inscription.state === "open" ? "🚨 ABIERTAS" : "Cerradas";
+      await this.bot.sendMessage(chatId, `Estado DACE\nInscripciones: ${inscriptionText}\n${inscription.detail}\n\n${formatAvailability(features)}`);
+    } catch (error) {
+      await this.bot.sendMessage(chatId, userError(error));
+    }
   }
 
   private async inscriptionCommand(chatId: number): Promise<void> {
@@ -142,6 +180,8 @@ export class TelegramService {
       case "pensum": return this.pensumCommand(chatId);
       case "grades-document": return this.gradesDocumentCommand(chatId);
       case "notes": return this.notesCommand(chatId);
+      case "status": return this.statusCommand(chatId);
+      case "help": return this.helpCommand(chatId);
       default: return;
     }
   }

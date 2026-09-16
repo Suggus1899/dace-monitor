@@ -29,6 +29,12 @@ export type GradeTable = {
   structured: boolean;
 };
 
+export type AcademicFeature = {
+  id: string;
+  label: string;
+  available: boolean;
+};
+
 export class DaceError extends Error {
   constructor(
     readonly code: "AUTH_FAILED" | "UPSTREAM_UNAVAILABLE" | "UNEXPECTED_CONTENT" | "PDF_PARSE_FAILED",
@@ -52,6 +58,29 @@ export function inscriptionDetail(html: string, state: InscriptionStatus["state"
   const text = cheerio.load(html).text().replace(/\s+/g, " ").trim();
   const message = text.match(/No hay ningún proceso de inscripción activo[^.]*\.?/iu)?.[0]?.trim();
   return message || "No hay ningún proceso de inscripción activo.";
+}
+
+const ACADEMIC_FEATURES = [
+  ["pensum", "Pénsum", ["Pénsum"]],
+  ["grades", "Constancia de notas", ["Constancia de Notas"]],
+  ["study-certificate", "Constancia de estudio", ["Constancia de Estudio"]],
+  ["study-certificate-f", "Constancia de estudio (F)", ["Constancia de Estudio (F)", "Constancia de Estudio(F)"]],
+  ["enrollment-certificate", "Constancia de inscripción", ["Constancia de Inscripción"]],
+  ["schedule", "Horario de clases", ["Horario de Clases"]],
+  ["calendar", "Cronograma", ["Cronograma"]],
+  ["active-term", "Período activo", ["Período Activo"]],
+  ["evaluation-plan", "Plan de evaluación", ["Plan de Evaluación"]],
+  ["downloads", "Descargas", ["Descargas"]],
+] as const;
+
+export function academicAvailability(html: string): AcademicFeature[] {
+  const $ = cheerio.load(html);
+  const availableLinks = $("a[href]").toArray().map((element) => normalize($(element).text()));
+  return ACADEMIC_FEATURES.map(([id, label, aliases]) => ({
+    id,
+    label,
+    available: aliases.some((alias) => availableLinks.includes(normalize(alias))),
+  }));
 }
 
 export function isPdfBuffer(buffer: Buffer): boolean {
@@ -189,6 +218,20 @@ export class DaceService {
       detail: inscriptionDetail(response.data, state),
       checkedAt: new Date(),
     };
+  }
+
+  async getAcademicAvailability(): Promise<AcademicFeature[]> {
+    const client = await this.authenticatedClient();
+    let response: AxiosResponse<string>;
+    try {
+      response = await client.get<string>("/estudiantes/", { headers: { Referer: `${BASE_URL}/estudiantes/` } });
+    } catch {
+      throw new DaceError("UPSTREAM_UNAVAILABLE", "DACE no respondió al consultar el período académico.");
+    }
+    if (!isAuthenticated(response)) {
+      throw new DaceError("UNEXPECTED_CONTENT", "DACE devolvió una página no autenticada al consultar el período académico.");
+    }
+    return academicAvailability(response.data);
   }
 
   private async download(path: string, fileName: string): Promise<DownloadedDocument> {

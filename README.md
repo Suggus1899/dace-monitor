@@ -6,9 +6,9 @@
 2. Ejecuta `npm install`.
 3. Ejecuta `npm run dev`.
 
-Comandos: `/start`, `/inscripcion`, `/pensum`, `/constancia_notas` y `/notas`.
+Comandos: `/start`, `/ayuda`, `/estado`, `/inscripcion`, `/pensum`, `/constancia_notas` y `/notas`.
 
-Solo `TELEGRAM_CHAT_ID` puede usar el bot. El monitor comprueba DACE al iniciar y cada 15 minutos. Si detecta inscripciones abiertas o un error, envía un mensaje a ese chat.
+Solo `TELEGRAM_CHAT_ID` puede usar el bot. El monitor comprueba DACE al iniciar y cada 15 minutos. Si detecta inscripciones abiertas, un error o que cambió la disponibilidad de documentos académicos, envía un mensaje a ese chat.
 
 ## Render Free
 
