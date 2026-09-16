@@ -1,5 +1,7 @@
 import TelegramBot, { type CallbackQuery } from "node-telegram-bot-api";
-import type { AcademicFeature, DaceError, DaceService, DownloadedDocument, GradeTable, InscriptionStatus } from "./daceService.js";
+import type { AccountStore } from "./accountStore.js";
+import type { AlertFrequency, AlertPreferencesSnapshot } from "./alertPreferences.js";
+import { DaceService, type AcademicFeature, type DaceError, type DownloadedDocument, type GradeTable, type InscriptionStatus } from "./daceService.js";
 
 const MAX_MESSAGE_LENGTH = 3_800;
 
@@ -22,7 +24,7 @@ function escapeHtml(text: string): string {
 
 function userError(error: unknown): string {
   const code = (error as DaceError | undefined)?.code;
-  if (code === "AUTH_FAILED") return "DACE rechazó las credenciales. Revisa UNERG_USER y UNERG_PASS.";
+  if (code === "AUTH_FAILED") return "DACE rechazó tus credenciales. Usa /conectar para actualizarlas.";
   if (code === "UPSTREAM_UNAVAILABLE") return "DACE no está disponible ahora. Intenta más tarde.";
   if (code === "PDF_PARSE_FAILED") return "Envié el PDF, pero no pude convertir sus notas en tabla.";
   return "DACE devolvió una respuesta inesperada. Intenta nuevamente más tarde.";
@@ -31,158 +33,150 @@ function userError(error: unknown): string {
 function formatAvailability(features: AcademicFeature[]): string {
   const available = features.filter((feature) => feature.available).map((feature) => feature.label);
   const unavailable = features.filter((feature) => !feature.available).map((feature) => feature.label);
+  return [`Disponible: ${available.join(", ") || "ninguna opción adicional"}.`, `Sin período activo: ${unavailable.join(", ") || "ninguna"}.`].join("\n");
+}
+
+function formatPreferences(preferences: AlertPreferencesSnapshot): string {
   return [
-    `Disponible: ${available.join(", ") || "ninguna opción adicional"}.`,
-    `Sin período activo: ${unavailable.join(", ") || "ninguna"}.`,
+    "Alertas de inscripciones",
+    `Estado: ${preferences.inscriptionsEnabled ? "activadas" : "pausadas"}.`,
+    `Frecuencia: cada ${preferences.frequency} minutos mientras estén abiertas.`,
+    `Silencio nocturno (22:00–06:59 Caracas): ${preferences.quietHoursEnabled ? "activado" : "desactivado"}.`,
   ].join("\n");
 }
 
 export class TelegramService {
   readonly bot: TelegramBot;
 
-  constructor(
-    token: string,
-    private readonly allowedChatId: string,
-    private readonly dace: DaceService,
-  ) {
+  constructor(token: string, private readonly accounts: AccountStore, private readonly appBaseUrl: string) {
     this.bot = new TelegramBot(token, { polling: true });
   }
 
   start(): void {
     this.bot.onText(/^\/start(?:@\w+)?$/, (message) => void this.startCommand(message.chat.id));
-    this.bot.onText(/^\/inscripcion(?:@\w+)?$/, (message) => void this.inscriptionCommand(message.chat.id));
-    this.bot.onText(/^\/pensum(?:@\w+)?$/, (message) => void this.pensumCommand(message.chat.id));
-    this.bot.onText(/^\/constancia_notas(?:@\w+)?$/, (message) => void this.gradesDocumentCommand(message.chat.id));
-    this.bot.onText(/^\/notas(?:@\w+)?$/, (message) => void this.notesCommand(message.chat.id));
-    this.bot.onText(/^\/estado(?:@\w+)?$/, (message) => void this.statusCommand(message.chat.id));
-    this.bot.onText(/^\/ayuda(?:@\w+)?$/, (message) => void this.helpCommand(message.chat.id));
+    this.bot.onText(/^\/conectar(?:@\w+)?$/, (message) => void this.connectCommand(message.chat.id));
+    this.bot.onText(/^\/desconectar(?:@\w+)?$/, (message) => void this.disconnectCommand(message.chat.id));
+    this.bot.onText(/^\/(inscripcion|pensum|constancia_notas|notas|estado|ping|alertas|ayuda)(?:@\w+)?$/, (message, match) => void this.command(message.chat.id, match?.[1]));
     this.bot.on("callback_query", (query) => void this.callback(query));
     this.bot.on("polling_error", (error) => console.error("Telegram polling error:", error.message));
   }
 
-  async stop(): Promise<void> {
-    await this.bot.stopPolling();
-  }
+  async stop(): Promise<void> { await this.bot.stopPolling(); }
 
-  private allowed(chatId: number | string): boolean {
-    return String(chatId) === this.allowedChatId;
+  private async dace(chatId: number): Promise<DaceService | undefined> {
+    const credentials = await this.accounts.credentials(String(chatId));
+    if (!credentials) {
+      await this.bot.sendMessage(chatId, "Primero conecta tu cuenta de DACE con /conectar.");
+      return undefined;
+    }
+    return new DaceService(credentials);
   }
 
   private async startCommand(chatId: number): Promise<void> {
-    if (!this.allowed(chatId)) return;
-    await this.bot.sendMessage(chatId, "DACE UNERG: elige una consulta.", {
+    const connected = await this.accounts.credentials(String(chatId));
+    await this.bot.sendMessage(chatId, connected ? "DACE UNERG: elige una consulta." : "Conecta tu cuenta de DACE para consultar tus datos de forma privada.", {
+      reply_markup: {
+        inline_keyboard: connected
+          ? [
+              [{ text: "Estado", callback_data: "status" }, { text: "Inscripción", callback_data: "inscription" }],
+              [{ text: "Comprobar bot", callback_data: "ping" }, { text: "Alertas", callback_data: "alerts" }],
+              [{ text: "Pénsum", callback_data: "pensum" }],
+              [{ text: "Constancia de notas", callback_data: "grades-document" }, { text: "Notas", callback_data: "notes" }],
+              [{ text: "Desconectar cuenta", callback_data: "disconnect" }],
+            ]
+          : [[{ text: "Conectar DACE", callback_data: "connect" }]],
+      },
+    });
+  }
+
+  private async connectCommand(chatId: number): Promise<void> {
+    const token = await this.accounts.createConnectionToken(String(chatId));
+    await this.bot.sendMessage(chatId, `Abre este enlace privado para conectar DACE:\n${this.appBaseUrl}/connect?token=${token}\n\nVence en 10 minutos. No envíes tus credenciales por Telegram.`);
+  }
+
+  private async disconnectCommand(chatId: number): Promise<void> {
+    await this.accounts.deleteAccount(String(chatId));
+    await this.bot.sendMessage(chatId, "Tu cuenta y preferencias guardadas fueron eliminadas. Puedes volver a conectarte con /conectar.");
+  }
+
+  private async command(chatId: number, command: string | undefined): Promise<void> {
+    if (command === "ayuda") {
+      await this.bot.sendMessage(chatId, ["/conectar — conecta tu cuenta de forma segura.", "/desconectar — elimina tus credenciales guardadas.", "/estado, /inscripcion, /ping, /alertas, /pensum, /constancia_notas, /notas"].join("\n"));
+      return;
+    }
+    if (command === "alertas") return this.alertsCommand(chatId);
+    const dace = await this.dace(chatId);
+    if (!dace) return;
+    try {
+      if (command === "estado") {
+        const [inscription, features] = await Promise.all([dace.checkInscription(), dace.getAcademicAvailability()]);
+        await this.bot.sendMessage(chatId, `Estado DACE\nInscripciones: ${inscription.state === "open" ? "🚨 ABIERTAS" : "Cerradas"}\n${inscription.detail}\n\n${formatAvailability(features)}`);
+      } else if (command === "inscripcion") {
+        const status: InscriptionStatus = await dace.checkInscription();
+        await this.bot.sendMessage(chatId, status.state === "open" ? `🚨 INSCRIPCIONES ABIERTAS\n${status.detail}` : `Inscripciones cerradas.\n${status.detail}`);
+      } else if (command === "ping") {
+        const status = await dace.checkInscription();
+        await this.bot.sendMessage(chatId, `✅ Bot y Render operativos.\n✅ DACE disponible.\nInscripciones: ${status.state === "open" ? "ABIERTAS" : "cerradas"}.`);
+      } else if (command === "pensum") {
+        await this.sendDocument(chatId, await dace.downloadPensum(), "Pénsum oficial DACE.");
+      } else if (command === "constancia_notas") {
+        const document = await dace.downloadGrades();
+        await this.sendDocument(chatId, { ...document, fileName: "constancia-notas.pdf" }, "Constancia de notas oficial DACE.");
+      } else if (command === "notas") {
+        await this.notesCommand(chatId, dace);
+      }
+    } catch (error) {
+      if (command === "ping") await this.bot.sendMessage(chatId, "✅ Bot y Render operativos.\n⚠️ DACE no está disponible ahora.");
+      else await this.bot.sendMessage(chatId, userError(error));
+    }
+  }
+
+  private async sendDocument(chatId: number, document: DownloadedDocument, caption: string): Promise<void> {
+    await this.bot.sendDocument(chatId, document.buffer, { caption }, { filename: document.fileName, contentType: "application/pdf" });
+  }
+
+  private async notesCommand(chatId: number, dace: DaceService): Promise<void> {
+    const document = await dace.downloadGrades();
+    await this.sendDocument(chatId, document, "Reporte oficial de notas DACE.");
+    let grades: GradeTable;
+    try { grades = await dace.extractGradesTable(document.buffer); }
+    catch (error) { await this.bot.sendMessage(chatId, userError(error)); return; }
+    const heading = grades.structured ? "Tabla extraída del PDF:" : "Texto extraído del PDF:";
+    for (const [index, part] of chunks(grades.text).entries()) {
+      await this.bot.sendMessage(chatId, `${heading}${index ? " (continuación)" : ""}\n<pre>${escapeHtml(part)}</pre>`, { parse_mode: "HTML" });
+    }
+  }
+
+  private async alertsCommand(chatId: number): Promise<void> {
+    const preferences = await this.accounts.preferences(String(chatId));
+    await this.bot.sendMessage(chatId, formatPreferences(preferences), {
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Estado", callback_data: "status" }, { text: "Inscripción", callback_data: "inscription" }],
-          [{ text: "Pénsum", callback_data: "pensum" }],
-          [{ text: "Constancia de notas", callback_data: "grades-document" }],
-          [{ text: "Notas", callback_data: "notes" }],
-          [{ text: "Ayuda", callback_data: "help" }],
+          [{ text: preferences.inscriptionsEnabled ? "Pausar inscripciones" : "Activar inscripciones", callback_data: "alerts-toggle" }],
+          [15, 30, 60].map((frequency) => ({ text: `${preferences.frequency === frequency ? "✓ " : ""}${frequency} min`, callback_data: `alerts-frequency-${frequency}` })),
+          [{ text: `${preferences.quietHoursEnabled ? "Desactivar" : "Activar"} silencio nocturno`, callback_data: "alerts-quiet" }],
         ],
       },
     });
   }
 
-  private async helpCommand(chatId: number): Promise<void> {
-    if (!this.allowed(chatId)) return;
-    await this.bot.sendMessage(chatId, [
-      "Comandos disponibles:",
-      "/estado — opciones que DACE tiene habilitadas.",
-      "/inscripcion — estado actual de inscripciones.",
-      "/pensum — PDF oficial.",
-      "/constancia_notas — PDF oficial.",
-      "/notas — PDF y tabla extraída.",
-    ].join("\n"));
-  }
-
-  private async statusCommand(chatId: number): Promise<void> {
-    if (!this.allowed(chatId)) return;
-    try {
-      const [inscription, features] = await Promise.all([
-        this.dace.checkInscription(),
-        this.dace.getAcademicAvailability(),
-      ]);
-      const inscriptionText = inscription.state === "open" ? "🚨 ABIERTAS" : "Cerradas";
-      await this.bot.sendMessage(chatId, `Estado DACE\nInscripciones: ${inscriptionText}\n${inscription.detail}\n\n${formatAvailability(features)}`);
-    } catch (error) {
-      await this.bot.sendMessage(chatId, userError(error));
-    }
-  }
-
-  private async inscriptionCommand(chatId: number): Promise<void> {
-    if (!this.allowed(chatId)) return;
-    try {
-      const status: InscriptionStatus = await this.dace.checkInscription();
-      const message = status.state === "open"
-        ? `🚨 INSCRIPCIONES ABIERTAS\n${status.detail}`
-        : `Inscripciones cerradas.\n${status.detail}`;
-      await this.bot.sendMessage(chatId, message);
-    } catch (error) {
-      await this.bot.sendMessage(chatId, userError(error));
-    }
-  }
-
-  private async sendDocument(chatId: number, document: DownloadedDocument, caption: string): Promise<void> {
-    await this.bot.sendDocument(chatId, document.buffer, { caption }, {
-      filename: document.fileName,
-      contentType: "application/pdf",
-    });
-  }
-
-  private async pensumCommand(chatId: number): Promise<void> {
-    if (!this.allowed(chatId)) return;
-    try {
-      await this.sendDocument(chatId, await this.dace.downloadPensum(), "Pénsum oficial DACE.");
-    } catch (error) {
-      await this.bot.sendMessage(chatId, userError(error));
-    }
-  }
-
-  private async gradesDocumentCommand(chatId: number): Promise<void> {
-    if (!this.allowed(chatId)) return;
-    try {
-      const document = await this.dace.downloadGrades();
-      await this.sendDocument(chatId, { ...document, fileName: "constancia-notas.pdf" }, "Constancia de notas oficial DACE.");
-    } catch (error) {
-      await this.bot.sendMessage(chatId, userError(error));
-    }
-  }
-
-  private async notesCommand(chatId: number): Promise<void> {
-    if (!this.allowed(chatId)) return;
-    try {
-      const document = await this.dace.downloadGrades();
-      await this.sendDocument(chatId, document, "Reporte oficial de notas DACE.");
-      let grades: GradeTable;
-      try {
-        grades = await this.dace.extractGradesTable(document.buffer);
-      } catch (error) {
-        await this.bot.sendMessage(chatId, userError(error));
-        return;
-      }
-      const heading = grades.structured ? "Tabla extraída del PDF:" : "Texto extraído del PDF:";
-      for (const [index, part] of chunks(grades.text).entries()) {
-        await this.bot.sendMessage(chatId, `${heading}${index ? " (continuación)" : ""}\n<pre>${escapeHtml(part)}</pre>`, {
-          parse_mode: "HTML",
-        });
-      }
-    } catch (error) {
-      await this.bot.sendMessage(chatId, userError(error));
-    }
-  }
-
   private async callback(query: CallbackQuery): Promise<void> {
     const chatId = query.message?.chat.id;
-    if (chatId === undefined || !this.allowed(chatId)) return;
+    if (chatId === undefined) return;
     await this.bot.answerCallbackQuery(query.id);
-    switch (query.data) {
-      case "inscription": return this.inscriptionCommand(chatId);
-      case "pensum": return this.pensumCommand(chatId);
-      case "grades-document": return this.gradesDocumentCommand(chatId);
-      case "notes": return this.notesCommand(chatId);
-      case "status": return this.statusCommand(chatId);
-      case "help": return this.helpCommand(chatId);
-      default: return;
+    if (query.data === "connect") return this.connectCommand(chatId);
+    if (query.data === "disconnect") return this.disconnectCommand(chatId);
+    if (query.data === "alerts") return this.alertsCommand(chatId);
+    if (query.data === "alerts-toggle" || query.data === "alerts-quiet" || query.data?.startsWith("alerts-frequency-")) {
+      const current = await this.accounts.preferences(String(chatId));
+      const frequency = Number(query.data?.replace("alerts-frequency-", "")) as AlertFrequency;
+      const next = query.data === "alerts-toggle" ? { ...current, inscriptionsEnabled: !current.inscriptionsEnabled }
+        : query.data === "alerts-quiet" ? { ...current, quietHoursEnabled: !current.quietHoursEnabled }
+        : { ...current, frequency };
+      await this.accounts.updatePreferences(String(chatId), next);
+      return this.alertsCommand(chatId);
     }
+    const commands: Record<string, string> = { inscription: "inscripcion", pensum: "pensum", "grades-document": "constancia_notas", notes: "notas", status: "estado", ping: "ping", help: "ayuda" };
+    return this.command(chatId, commands[query.data ?? ""]);
   }
 }

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { isQuietHour } from "../src/services/alertPreferences.js";
+import { CredentialCipher } from "../src/services/credentialCipher.js";
 import { daceHealthTransition } from "../src/jobs/inscriptionCron.js";
 import { academicAvailability, formatGradeTable, inscriptionDetail, isClosedInscriptionHtml, isPdfBuffer } from "../src/services/daceService.js";
 
@@ -28,4 +30,13 @@ test("avisa una sola vez por caída y una vez al recuperarse", () => {
   assert.equal(daceHealthTransition(true, true), undefined);
   assert.equal(daceHealthTransition(true, false), "recovered");
   assert.equal(daceHealthTransition(false, false), undefined);
+});
+
+test("cifra las credenciales y respeta el silencio nocturno", () => {
+  const cipher = new CredentialCipher("clave de prueba");
+  const encrypted = cipher.encrypt("secreto");
+  assert.notEqual(encrypted, "secreto");
+  assert.equal(cipher.decrypt(encrypted), "secreto");
+  assert.equal(isQuietHour(22), true);
+  assert.equal(isQuietHour(7), false);
 });

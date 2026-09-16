@@ -14,10 +14,21 @@ function port(value: string | undefined): number {
   return parsed;
 }
 
+function url(value: string): string {
+  try {
+    return new URL(value).origin;
+  } catch {
+    throw new Error("APP_BASE_URL debe ser una URL HTTPS válida.");
+  }
+}
+
 export const env = {
   telegramBotToken: required("TELEGRAM_BOT_TOKEN"),
   telegramChatId: required("TELEGRAM_CHAT_ID"),
   unergUser: required("UNERG_USER"),
   unergPass: required("UNERG_PASS"),
+  databaseUrl: required("DATABASE_URL"),
+  credentialEncryptionKey: required("CREDENTIAL_ENCRYPTION_KEY"),
+  appBaseUrl: url(required("APP_BASE_URL")),
   port: port(process.env.PORT),
 } as const;
