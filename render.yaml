@@ -16,3 +16,9 @@ services:
         sync: false
       - key: UNERG_PASS
         sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: CREDENTIAL_ENCRYPTION_KEY
+        sync: false
+      - key: APP_BASE_URL
+        sync: false

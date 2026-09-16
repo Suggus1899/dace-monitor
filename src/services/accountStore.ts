@@ -89,6 +89,30 @@ export class AccountStore {
     return result.rows[0]?.chat_id;
   }
 
+  async consumeConnectionTokenAndSaveCredentials(token: string, user: string, pass: string): Promise<string | undefined> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const tokenResult = await client.query<{ chat_id: string }>("DELETE FROM connection_tokens WHERE token_hash = $1 AND expires_at > NOW() RETURNING chat_id", [tokenHash(token)]);
+      const chatId = tokenResult.rows[0]?.chat_id;
+      if (!chatId) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      await client.query(`
+        INSERT INTO accounts (chat_id, user_ciphertext, pass_ciphertext) VALUES ($1, $2, $3)
+        ON CONFLICT (chat_id) DO UPDATE SET user_ciphertext = EXCLUDED.user_ciphertext, pass_ciphertext = EXCLUDED.pass_ciphertext, updated_at = NOW()
+      `, [chatId, this.cipher.encrypt(user), this.cipher.encrypt(pass)]);
+      await client.query("COMMIT");
+      return chatId;
+    } catch (error) {
+      await client.query("ROLLBACK").catch((rollbackError: unknown) => console.error("Could not roll back connection transaction:", rollbackError));
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async preferences(chatId: string): Promise<AlertPreferencesSnapshot> {
     const result = await this.pool.query<{ inscriptions_enabled: boolean; alert_frequency: number; quiet_hours_enabled: boolean }>("SELECT inscriptions_enabled, alert_frequency, quiet_hours_enabled FROM accounts WHERE chat_id = $1", [chatId]);
     return result.rows[0] ? toPreferences(result.rows[0]) : DEFAULT_PREFERENCES;
@@ -101,6 +125,16 @@ export class AccountStore {
   async shouldNotifyInscription(chatId: string, now = new Date()): Promise<boolean> {
     const preferences = await this.preferences(chatId);
     if (!preferences.inscriptionsEnabled || (preferences.quietHoursEnabled && isQuietHour(caracasHour(now)))) return false;
+    const result = await this.pool.query<{ last_inscription_alert_at: Date | null; alert_frequency: number }>(
+      "SELECT last_inscription_alert_at, alert_frequency FROM accounts WHERE chat_id = $1",
+      [chatId],
+    );
+    const row = result.rows[0];
+    if (!row || row.last_inscription_alert_at === null) return Boolean(row);
+    return now.getTime() - row.last_inscription_alert_at.getTime() >= row.alert_frequency * 60_000;
+  }
+
+  async markInscriptionNotified(chatId: string, now = new Date()): Promise<boolean> {
     const result = await this.pool.query(`
       UPDATE accounts SET last_inscription_alert_at = $2
       WHERE chat_id = $1 AND (last_inscription_alert_at IS NULL OR last_inscription_alert_at <= $2 - (alert_frequency * INTERVAL '1 minute'))

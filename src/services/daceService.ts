@@ -141,6 +141,8 @@ function findTableRows(value: unknown): string[][] | undefined {
 }
 
 export class DaceService {
+  private authenticated?: Promise<AxiosInstance>;
+
   constructor(
     private readonly credentials: { user: string; pass: string },
   ) {}
@@ -162,7 +164,12 @@ export class DaceService {
     }));
   }
 
-  private async authenticatedClient(): Promise<AxiosInstance> {
+  private authenticatedClient(): Promise<AxiosInstance> {
+    this.authenticated ??= this.createAuthenticatedClient();
+    return this.authenticated;
+  }
+
+  private async createAuthenticatedClient(): Promise<AxiosInstance> {
     const client = this.client();
     let loginPage: AxiosResponse<string>;
     try {

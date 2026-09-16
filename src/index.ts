@@ -43,7 +43,7 @@ if (!await accounts.credentials(env.telegramChatId)) {
   await accounts.saveCredentials(env.telegramChatId, env.unergUser, env.unergPass);
 }
 
-const telegram = new TelegramService(env.telegramBotToken, accounts, env.appBaseUrl);
+const telegram = new TelegramService(env.telegramBotToken, accounts, env.appBaseUrl, env.telegramChatId);
 telegram.start();
 const task = startInscriptionCron(accounts, telegram);
 
@@ -74,9 +74,8 @@ const server = createServer((request, response) => void (async () => {
     }
     try {
       await new DaceService({ user, pass }).checkInscription();
-      const chatId = await accounts.consumeConnectionToken(token);
+      const chatId = await accounts.consumeConnectionTokenAndSaveCredentials(token, user, pass);
       if (!chatId) throw new Error("El enlace ya fue utilizado.");
-      await accounts.saveCredentials(chatId, user, pass);
       await telegram.bot.sendMessage(chatId, "✅ Tu cuenta DACE fue conectada. Usa /start para ver las opciones.");
       sendHtml(response, 200, page("Cuenta conectada", "<h1>Cuenta conectada</h1><p>Regresa a Telegram y usa /start.</p>"));
     } catch {

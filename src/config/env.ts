@@ -16,7 +16,9 @@ function port(value: string | undefined): number {
 
 function url(value: string): string {
   try {
-    return new URL(value).origin;
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:") throw new Error();
+    return parsed.origin;
   } catch {
     throw new Error("APP_BASE_URL debe ser una URL HTTPS válida.");
   }

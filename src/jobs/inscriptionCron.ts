@@ -12,11 +12,13 @@ export function startInscriptionCron(accounts: AccountStore, telegram: TelegramS
   let running = false;
   const lastAvailability = new Map<string, string>();
   const unavailableChats = new Set<string>();
-  const sendAlert = async (chatId: string, message: string): Promise<void> => {
+  const sendAlert = async (chatId: string, message: string): Promise<boolean> => {
     try {
       await telegram.bot.sendMessage(chatId, message);
+      return true;
     } catch (error) {
       console.error("Could not send cron alert:", error);
+      return false;
     }
   };
   const checkAccount = async (chatId: string, user: string, pass: string): Promise<void> => {
@@ -27,24 +29,27 @@ export function startInscriptionCron(accounts: AccountStore, telegram: TelegramS
       const available = features.filter((feature) => feature.available).map((feature) => feature.label);
       const availability = available.join("|");
       const healthAlert = daceHealthTransition(unavailableChats.has(chatId), false);
-      unavailableChats.delete(chatId);
       if (healthAlert === "recovered") {
-        await sendAlert(chatId, "✅ DACE volvió a estar disponible.");
+        if (await sendAlert(chatId, "✅ DACE volvió a estar disponible.")) unavailableChats.delete(chatId);
       }
       if (status.state === "open" && await accounts.shouldNotifyInscription(chatId)) {
-        await sendAlert(chatId, `🚨 INSCRIPCIONES ABIERTAS\n${status.detail}`);
+        const sent = await sendAlert(chatId, `🚨 INSCRIPCIONES ABIERTAS\n${status.detail}`);
+        if (sent) await accounts.markInscriptionNotified(chatId);
       }
       if (lastAvailability.has(chatId) && availability !== lastAvailability.get(chatId)) {
-        await sendAlert(chatId, `🔔 DACE cambió las opciones disponibles: ${available.join(", ") || "ninguna opción adicional"}.`);
+        const sent = await sendAlert(chatId, `🔔 DACE cambió las opciones disponibles: ${available.join(", ") || "ninguna opción adicional"}.`);
+        if (!sent) return;
       }
+      if (healthAlert === "recovered") unavailableChats.delete(chatId);
       lastAvailability.set(chatId, availability);
       console.info(`Inscription check for ${chatId}: ${status.state}`);
     } catch (error) {
       console.error(`Inscription cron failed for ${chatId}:`, error);
       const healthAlert = daceHealthTransition(unavailableChats.has(chatId), true);
-      unavailableChats.add(chatId);
       if (healthAlert === "down") {
-        await sendAlert(chatId, "⚠️ DACE no está disponible o no fue posible iniciar sesión. Avisaré cuando se recupere.");
+        if (await sendAlert(chatId, "⚠️ DACE no está disponible o no fue posible iniciar sesión. Avisaré cuando se recupere.")) {
+          unavailableChats.add(chatId);
+        }
       }
     }
   };
@@ -58,6 +63,8 @@ export function startInscriptionCron(accounts: AccountStore, telegram: TelegramS
     try {
       // ponytail: checks are sequential; add bounded concurrency only when the user count makes a run exceed 15 minutes.
       for (const account of await accounts.allCredentials()) await checkAccount(account.chatId, account.user, account.pass);
+    } catch (error) {
+      console.error("Inscription cron run failed:", error);
     } finally {
       running = false;
     }

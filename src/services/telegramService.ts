@@ -48,8 +48,18 @@ function formatPreferences(preferences: AlertPreferencesSnapshot): string {
 export class TelegramService {
   readonly bot: TelegramBot;
 
-  constructor(token: string, private readonly accounts: AccountStore, private readonly appBaseUrl: string) {
+  constructor(token: string, private readonly accounts: AccountStore, private readonly appBaseUrl: string, private readonly authorizedChatId: string) {
     this.bot = new TelegramBot(token, { polling: true });
+  }
+
+  private authorized(chatId: number): boolean {
+    return String(chatId) === this.authorizedChatId;
+  }
+
+  private runHandler(name: string, handler: () => Promise<void>): void {
+    void handler().catch(async (error: unknown) => {
+      console.error(`Telegram handler failed: ${name}:`, error);
+    });
   }
 
   start(): void {
@@ -66,11 +76,11 @@ export class TelegramService {
       { command: "notas", description: "Ver notas" },
       { command: "ayuda", description: "Ver ayuda" },
     ]).catch((error: Error) => console.error("Could not set Telegram commands:", error.message));
-    this.bot.onText(/^\/start(?:@\w+)?$/, (message) => void this.startCommand(message.chat.id));
-    this.bot.onText(/^\/conectar(?:@\w+)?$/, (message) => void this.connectCommand(message.chat.id));
-    this.bot.onText(/^\/desconectar(?:@\w+)?$/, (message) => void this.disconnectCommand(message.chat.id));
-    this.bot.onText(/^\/(inscripcion|pensum|constancia_notas|notas|estado|ping|alertas|ayuda)(?:@\w+)?$/, (message, match) => void this.command(message.chat.id, match?.[1]));
-    this.bot.on("callback_query", (query) => void this.callback(query));
+    this.bot.onText(/^\/start(?:@\w+)?$/, (message) => this.runHandler("start", () => this.startCommand(message.chat.id)));
+    this.bot.onText(/^\/conectar(?:@\w+)?$/, (message) => this.runHandler("connect", () => this.connectCommand(message.chat.id)));
+    this.bot.onText(/^\/desconectar(?:@\w+)?$/, (message) => this.runHandler("disconnect", () => this.disconnectCommand(message.chat.id)));
+    this.bot.onText(/^\/(inscripcion|pensum|constancia_notas|notas|estado|ping|alertas|ayuda)(?:@\w+)?$/, (message, match) => this.runHandler("command", () => this.command(message.chat.id, match?.[1])));
+    this.bot.on("callback_query", (query) => this.runHandler("callback", () => this.callback(query)));
     this.bot.on("polling_error", (error) => console.error("Telegram polling error:", error.message));
   }
 
@@ -86,6 +96,7 @@ export class TelegramService {
   }
 
   private async startCommand(chatId: number): Promise<void> {
+    if (!this.authorized(chatId)) return;
     const connected = await this.accounts.credentials(String(chatId));
     await this.bot.sendMessage(chatId, connected ? "DACE UNERG: elige una consulta." : "Conecta tu cuenta de DACE para consultar tus datos de forma privada.", {
       reply_markup: {
@@ -103,16 +114,19 @@ export class TelegramService {
   }
 
   private async connectCommand(chatId: number): Promise<void> {
+    if (!this.authorized(chatId)) return;
     const token = await this.accounts.createConnectionToken(String(chatId));
     await this.bot.sendMessage(chatId, `Abre este enlace privado para conectar DACE:\n<a href="${this.appBaseUrl}/connect?token=${token}">🔐 Abrir enlace seguro</a>\n\nVence en 10 minutos. No envíes tus credenciales por Telegram.`, { parse_mode: "HTML" });
   }
 
   private async disconnectCommand(chatId: number): Promise<void> {
+    if (!this.authorized(chatId)) return;
     await this.accounts.deleteAccount(String(chatId));
     await this.bot.sendMessage(chatId, "Tu cuenta y preferencias guardadas fueron eliminadas. Puedes volver a conectarte con /conectar.");
   }
 
   private async command(chatId: number, command: string | undefined): Promise<void> {
+    if (!this.authorized(chatId)) return;
     if (command === "ayuda") {
       await this.bot.sendMessage(chatId, ["/conectar — conecta tu cuenta de forma segura.", "/desconectar — elimina tus credenciales guardadas.", "/estado, /inscripcion, /ping, /alertas, /pensum, /constancia_notas, /notas"].join("\n"));
       return;
@@ -176,6 +190,7 @@ export class TelegramService {
   private async callback(query: CallbackQuery): Promise<void> {
     const chatId = query.message?.chat.id;
     if (chatId === undefined) return;
+    if (!this.authorized(chatId)) return;
     await this.bot.answerCallbackQuery(query.id);
     if (query.data === "connect") return this.connectCommand(chatId);
     if (query.data === "disconnect") return this.disconnectCommand(chatId);
