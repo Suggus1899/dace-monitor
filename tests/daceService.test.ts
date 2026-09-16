@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { daceHealthTransition } from "../src/jobs/inscriptionCron.js";
 import { academicAvailability, formatGradeTable, inscriptionDetail, isClosedInscriptionHtml, isPdfBuffer } from "../src/services/daceService.js";
 
 test("detecta el estado cerrado y no confunde otro HTML con cerrado", () => {
@@ -20,4 +21,11 @@ test("identifica las opciones que DACE expone como enlaces", () => {
   assert.equal(features.find((feature) => feature.id === "pensum")?.available, true);
   assert.equal(features.find((feature) => feature.id === "grades")?.available, true);
   assert.equal(features.find((feature) => feature.id === "schedule")?.available, false);
+});
+
+test("avisa una sola vez por caída y una vez al recuperarse", () => {
+  assert.equal(daceHealthTransition(false, true), "down");
+  assert.equal(daceHealthTransition(true, true), undefined);
+  assert.equal(daceHealthTransition(true, false), "recovered");
+  assert.equal(daceHealthTransition(false, false), undefined);
 });
