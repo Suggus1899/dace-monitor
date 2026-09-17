@@ -17,7 +17,7 @@ function sendHtml(response: ServerResponse, status: number, body: string): void 
   response.writeHead(status, {
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-store",
-    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",
+    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'",
     "x-content-type-options": "nosniff",
     "x-frame-options": "DENY",
     "referrer-policy": "no-referrer",
@@ -43,7 +43,7 @@ if (!await accounts.credentials(env.telegramChatId)) {
   await accounts.saveCredentials(env.telegramChatId, env.unergUser, env.unergPass);
 }
 
-const telegram = new TelegramService(env.telegramBotToken, accounts, env.appBaseUrl, env.telegramChatId);
+const telegram = new TelegramService(env.telegramBotToken, accounts, env.appBaseUrl);
 telegram.start();
 const task = startInscriptionCron(accounts, telegram);
 
@@ -55,12 +55,7 @@ const server = createServer((request, response) => void (async () => {
     return;
   }
   if (request.method === "GET" && requestUrl.pathname === "/connect") {
-    const token = requestUrl.searchParams.get("token") ?? "";
-    if (!await accounts.connectionChatId(token)) {
-      sendHtml(response, 400, page("Enlace vencido", "<h1>Enlace vencido</h1><p>Vuelve a Telegram y usa /conectar para generar otro.</p>"));
-      return;
-    }
-    sendHtml(response, 200, page("Conectar DACE", `<h1>Conectar DACE</h1><p>Las credenciales se cifran antes de guardarse.</p><form method="post" action="/connect"><input type="hidden" name="token" value="${html(token)}"><label>Correo o usuario<input name="user" autocomplete="username" required maxlength="320"></label><label>Contraseña<input type="password" name="pass" autocomplete="current-password" required maxlength="512"></label><button type="submit">Conectar</button></form><small>Este enlace vence en 10 minutos. No compartas esta página.</small>`));
+    sendHtml(response, 200, page("Conectar DACE", `<h1>Conectar DACE</h1><p>Las credenciales se cifran antes de guardarse.</p><form method="post" action="/connect"><input id="token" type="hidden" name="token"><label>Correo o usuario<input name="user" autocomplete="username" required maxlength="320"></label><label>Contraseña<input type="password" name="pass" autocomplete="current-password" required maxlength="512"></label><button id="submit" type="submit">Conectar</button></form><small>Este enlace vence en 10 minutos. No compartas esta página.</small><script>const token=new URLSearchParams(location.hash.slice(1)).get("token");const input=document.getElementById("token");if(!token||!/^[A-Za-z0-9_-]{43}$/.test(token)){document.body.innerHTML="<h1>Enlace inválido</h1><p>Vuelve a Telegram y usa /conectar para generar otro.</p>"}else{input.value=token;history.replaceState(null,"",location.pathname)}</script>`));
     return;
   }
   if (request.method === "POST" && requestUrl.pathname === "/connect") {

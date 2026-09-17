@@ -4,6 +4,7 @@ import { isQuietHour } from "../src/services/alertPreferences.js";
 import { CredentialCipher } from "../src/services/credentialCipher.js";
 import { daceHealthTransition } from "../src/jobs/inscriptionCron.js";
 import { academicAvailability, formatGradeTable, inscriptionDetail, isClosedInscriptionHtml, isPdfBuffer } from "../src/services/daceService.js";
+import { preferencesForAlertArgument } from "../src/services/telegramService.js";
 
 test("detecta el estado cerrado y no confunde otro HTML con cerrado", () => {
   const closedHtml = "<p>No hay ningún proceso de inscripción activo para INGENIERIA.</p><nav>Inicio Calificaciones</nav><script>codigo()</script>";
@@ -39,4 +40,12 @@ test("cifra las credenciales y respeta el silencio nocturno", () => {
   assert.equal(cipher.decrypt(encrypted), "secreto");
   assert.equal(isQuietHour(22), true);
   assert.equal(isQuietHour(7), false);
+});
+
+test("acepta cambios de alertas por comandos de texto", () => {
+  const initial = { inscriptionsEnabled: true, frequency: 15 as const, quietHoursEnabled: false };
+  assert.equal(preferencesForAlertArgument(initial, "pausar")?.inscriptionsEnabled, false);
+  assert.equal(preferencesForAlertArgument(initial, "60")?.frequency, 60);
+  assert.equal(preferencesForAlertArgument(initial, "noche")?.quietHoursEnabled, true);
+  assert.equal(preferencesForAlertArgument(initial, "desconocido"), undefined);
 });

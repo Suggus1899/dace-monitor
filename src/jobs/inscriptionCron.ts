@@ -42,9 +42,9 @@ export function startInscriptionCron(accounts: AccountStore, telegram: TelegramS
       }
       if (healthAlert === "recovered") unavailableChats.delete(chatId);
       lastAvailability.set(chatId, availability);
-      console.info(`Inscription check for ${chatId}: ${status.state}`);
+      console.info(`Inscription check: ${status.state}`);
     } catch (error) {
-      console.error(`Inscription cron failed for ${chatId}:`, error);
+      console.error("Inscription cron failed:", error);
       const healthAlert = daceHealthTransition(unavailableChats.has(chatId), true);
       if (healthAlert === "down") {
         if (await sendAlert(chatId, "⚠️ DACE no está disponible o no fue posible iniciar sesión. Avisaré cuando se recupere.")) {

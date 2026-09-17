@@ -45,15 +45,26 @@ function formatPreferences(preferences: AlertPreferencesSnapshot): string {
   ].join("\n");
 }
 
+export function preferencesForAlertArgument(preferences: AlertPreferencesSnapshot, argument: string): AlertPreferencesSnapshot | undefined {
+  const option = argument.trim().toLowerCase();
+  if (option === "activar" || option === "on") return { ...preferences, inscriptionsEnabled: true };
+  if (option === "pausar" || option === "desactivar" || option === "off") return { ...preferences, inscriptionsEnabled: false };
+  if (option === "noche") return { ...preferences, quietHoursEnabled: !preferences.quietHoursEnabled };
+  if (["15", "30", "60"].includes(option)) return { ...preferences, frequency: Number(option) as AlertFrequency };
+  return undefined;
+}
+
 export class TelegramService {
   readonly bot: TelegramBot;
 
-  constructor(token: string, private readonly accounts: AccountStore, private readonly appBaseUrl: string, private readonly authorizedChatId: string) {
+  constructor(token: string, private readonly accounts: AccountStore, private readonly appBaseUrl: string) {
     this.bot = new TelegramBot(token, { polling: true });
   }
 
-  private authorized(chatId: number): boolean {
-    return String(chatId) === this.authorizedChatId;
+  private async requirePrivateChat(chatId: number, chatType: string): Promise<boolean> {
+    if (chatType === "private") return true;
+    await this.bot.sendMessage(chatId, "Por privacidad, este bot solo funciona en el chat privado con el bot.");
+    return false;
   }
 
   private runHandler(name: string, handler: () => Promise<void>): void {
@@ -76,10 +87,10 @@ export class TelegramService {
       { command: "notas", description: "Ver notas" },
       { command: "ayuda", description: "Ver ayuda" },
     ]).catch((error: Error) => console.error("Could not set Telegram commands:", error.message));
-    this.bot.onText(/^\/start(?:@\w+)?$/, (message) => this.runHandler("start", () => this.startCommand(message.chat.id)));
-    this.bot.onText(/^\/conectar(?:@\w+)?$/, (message) => this.runHandler("connect", () => this.connectCommand(message.chat.id)));
-    this.bot.onText(/^\/desconectar(?:@\w+)?$/, (message) => this.runHandler("disconnect", () => this.disconnectCommand(message.chat.id)));
-    this.bot.onText(/^\/(inscripcion|pensum|constancia_notas|notas|estado|ping|alertas|ayuda)(?:@\w+)?$/, (message, match) => this.runHandler("command", () => this.command(message.chat.id, match?.[1])));
+    this.bot.onText(/^\/start(?:@\w+)?$/, (message) => this.runHandler("start", () => this.startCommand(message.chat.id, message.chat.type)));
+    this.bot.onText(/^\/conectar(?:@\w+)?$/, (message) => this.runHandler("connect", () => this.connectCommand(message.chat.id, message.chat.type)));
+    this.bot.onText(/^\/desconectar(?:@\w+)?$/, (message) => this.runHandler("disconnect", () => this.disconnectCommand(message.chat.id, message.chat.type)));
+    this.bot.onText(/^\/(inscripcion|pensum|constancia_notas|notas|estado|ping|alertas|ayuda)(?:@\w+)?(?:\s+(.+))?$/, (message, match) => this.runHandler("command", () => this.command(message.chat.id, message.chat.type, match?.[1], match?.[2])));
     this.bot.on("callback_query", (query) => this.runHandler("callback", () => this.callback(query)));
     this.bot.on("polling_error", (error) => console.error("Telegram polling error:", error.message));
   }
@@ -95,10 +106,10 @@ export class TelegramService {
     return new DaceService(credentials);
   }
 
-  private async startCommand(chatId: number): Promise<void> {
-    if (!this.authorized(chatId)) return;
+  private async startCommand(chatId: number, chatType: string): Promise<void> {
+    if (!await this.requirePrivateChat(chatId, chatType)) return;
     const connected = await this.accounts.credentials(String(chatId));
-    await this.bot.sendMessage(chatId, connected ? "DACE UNERG: elige una consulta." : "Conecta tu cuenta de DACE para consultar tus datos de forma privada.", {
+    await this.bot.sendMessage(chatId, connected ? "DACE UNERG: elige una consulta." : "Conecta tu cuenta de DACE para consultar tus datos de forma privada. Tus credenciales se cifran y puedes eliminarlas cuando quieras con /desconectar.", {
       reply_markup: {
         inline_keyboard: connected
           ? [
@@ -113,25 +124,25 @@ export class TelegramService {
     });
   }
 
-  private async connectCommand(chatId: number): Promise<void> {
-    if (!this.authorized(chatId)) return;
+  private async connectCommand(chatId: number, chatType: string): Promise<void> {
+    if (!await this.requirePrivateChat(chatId, chatType)) return;
     const token = await this.accounts.createConnectionToken(String(chatId));
-    await this.bot.sendMessage(chatId, `Abre este enlace privado para conectar DACE:\n<a href="${this.appBaseUrl}/connect?token=${token}">🔐 Abrir enlace seguro</a>\n\nVence en 10 minutos. No envíes tus credenciales por Telegram.`, { parse_mode: "HTML" });
+    await this.bot.sendMessage(chatId, `Abre este enlace privado para conectar DACE:\n<a href="${this.appBaseUrl}/connect#token=${token}">🔐 Abrir enlace seguro</a>\n\nVence en 10 minutos. No envíes tus credenciales por Telegram.`, { parse_mode: "HTML" });
   }
 
-  private async disconnectCommand(chatId: number): Promise<void> {
-    if (!this.authorized(chatId)) return;
+  private async disconnectCommand(chatId: number, chatType: string): Promise<void> {
+    if (!await this.requirePrivateChat(chatId, chatType)) return;
     await this.accounts.deleteAccount(String(chatId));
     await this.bot.sendMessage(chatId, "Tu cuenta y preferencias guardadas fueron eliminadas. Puedes volver a conectarte con /conectar.");
   }
 
-  private async command(chatId: number, command: string | undefined): Promise<void> {
-    if (!this.authorized(chatId)) return;
+  private async command(chatId: number, chatType: string, command: string | undefined, argument?: string): Promise<void> {
+    if (!await this.requirePrivateChat(chatId, chatType)) return;
     if (command === "ayuda") {
-      await this.bot.sendMessage(chatId, ["/conectar — conecta tu cuenta de forma segura.", "/desconectar — elimina tus credenciales guardadas.", "/estado, /inscripcion, /ping, /alertas, /pensum, /constancia_notas, /notas"].join("\n"));
+      await this.bot.sendMessage(chatId, ["/conectar — conecta tu cuenta de forma segura.", "/desconectar — elimina tus credenciales guardadas.", "/estado, /inscripcion, /ping, /pensum, /constancia_notas, /notas", "/alertas — ver opciones; /alertas activar|pausar|15|30|60|noche"].join("\n"));
       return;
     }
-    if (command === "alertas") return this.alertsCommand(chatId);
+    if (command === "alertas") return this.alertsCommand(chatId, argument);
     const dace = await this.dace(chatId);
     if (!dace) return;
     try {
@@ -174,8 +185,21 @@ export class TelegramService {
     }
   }
 
-  private async alertsCommand(chatId: number): Promise<void> {
-    const preferences = await this.accounts.preferences(String(chatId));
+  private async alertsCommand(chatId: number, argument?: string): Promise<void> {
+    if (!await this.accounts.credentials(String(chatId))) {
+      await this.bot.sendMessage(chatId, "Primero conecta tu cuenta de DACE con /conectar para configurar alertas.");
+      return;
+    }
+    let preferences = await this.accounts.preferences(String(chatId));
+    if (argument) {
+      const next = preferencesForAlertArgument(preferences, argument);
+      if (!next) {
+        await this.bot.sendMessage(chatId, "Usa /alertas activar, /alertas pausar, /alertas 15, /alertas 30, /alertas 60 o /alertas noche.");
+        return;
+      }
+      preferences = next;
+      await this.accounts.updatePreferences(String(chatId), preferences);
+    }
     await this.bot.sendMessage(chatId, formatPreferences(preferences), {
       reply_markup: {
         inline_keyboard: [
@@ -190,10 +214,13 @@ export class TelegramService {
   private async callback(query: CallbackQuery): Promise<void> {
     const chatId = query.message?.chat.id;
     if (chatId === undefined) return;
-    if (!this.authorized(chatId)) return;
+    if (query.message?.chat.type !== "private") {
+      await this.bot.answerCallbackQuery(query.id, { text: "Usa el chat privado con el bot.", show_alert: true });
+      return;
+    }
     await this.bot.answerCallbackQuery(query.id);
-    if (query.data === "connect") return this.connectCommand(chatId);
-    if (query.data === "disconnect") return this.disconnectCommand(chatId);
+    if (query.data === "connect") return this.connectCommand(chatId, "private");
+    if (query.data === "disconnect") return this.disconnectCommand(chatId, "private");
     if (query.data === "alerts") return this.alertsCommand(chatId);
     if (query.data === "alerts-toggle" || query.data === "alerts-quiet" || query.data?.startsWith("alerts-frequency-")) {
       const current = await this.accounts.preferences(String(chatId));
@@ -205,6 +232,6 @@ export class TelegramService {
       return this.alertsCommand(chatId);
     }
     const commands: Record<string, string> = { inscription: "inscripcion", pensum: "pensum", "grades-document": "constancia_notas", notes: "notas", status: "estado", ping: "ping", help: "ayuda" };
-    return this.command(chatId, commands[query.data ?? ""]);
+    return this.command(chatId, "private", commands[query.data ?? ""]);
   }
 }
